@@ -14,25 +14,31 @@ import androidx.core.content.ContextCompat
 class CallkitNotificationService : Service() {
     
     companion object {
-        
-        private val ActionForeground = listOf(
+        private val foregroundActions = setOf(
             CallkitConstants.ACTION_CALL_START,
             CallkitConstants.ACTION_CALL_ACCEPT
         )
+
+        fun shouldShowOngoingNotification(data: Bundle?): Boolean {
+            return data?.getBoolean(CallkitConstants.EXTRA_CALLKIT_CALLING_SHOW, true) == true
+        }
+
+        fun requiresOngoingNotificationService(action: String?, data: Bundle?): Boolean {
+            return action in foregroundActions && shouldShowOngoingNotification(data)
+        }
         
         fun startServiceWithAction(context: Context, action: String, data: Bundle?) {
+            if (!requiresOngoingNotificationService(action, data)) {
+                return
+            }
+
             val intent = Intent(context, CallkitNotificationService::class.java).apply {
                 this.action = action
                 putExtra(CallkitConstants.EXTRA_CALLKIT_INCOMING_DATA, data)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && intent.action in ActionForeground) {
-                data?.let {
-                    if (it.getBoolean(CallkitConstants.EXTRA_CALLKIT_CALLING_SHOW, true)) {
-                        ContextCompat.startForegroundService(context, intent)
-                    } else {
-                        context.startService(intent)
-                    }
-                }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ContextCompat.startForegroundService(context, intent)
             } else {
                 context.startService(intent)
             }
@@ -64,35 +70,24 @@ class CallkitNotificationService : Service() {
     }
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val action = intent?.action
         val data = intent?.getBundleExtra(CallkitConstants.EXTRA_CALLKIT_INCOMING_DATA)
             ?: run {
                 stopSelf(startId)
                 return START_NOT_STICKY
             }
 
-        if (data.getBoolean(CallkitConstants.EXTRA_CALLKIT_CALLING_SHOW, true) &&
-            intent.action in ActionForeground
-        ) {
-            getCallkitNotificationManager().createNotificationChanel(data)
-            startForegroundCompat(buildPlaceholderNotification(data))
+        if (!requiresOngoingNotificationService(action, data)) {
+            stopSelf(startId)
+            return START_NOT_STICKY
         }
 
-        when (intent.action) {
-            CallkitConstants.ACTION_CALL_START -> {
-                if (data.getBoolean(CallkitConstants.EXTRA_CALLKIT_CALLING_SHOW, true)) {
-                    showOngoingCallNotification(data, startId)
-                } else {
-                    stopSelf(startId)
-                }
-            }
-            CallkitConstants.ACTION_CALL_ACCEPT -> {
-                if (data.getBoolean(CallkitConstants.EXTRA_CALLKIT_CALLING_SHOW, true)) {
-                    getCallkitNotificationManager().clearIncomingNotification(data, true)
-                    showOngoingCallNotification(data, startId)
-                } else {
-                    stopSelf(startId)
-                }
-            }
+        getCallkitNotificationManager().createNotificationChanel(data)
+        startForegroundCompat(buildPlaceholderNotification(data))
+
+        when (action) {
+            CallkitConstants.ACTION_CALL_START,
+            CallkitConstants.ACTION_CALL_ACCEPT -> showOngoingCallNotification(data, startId)
             else -> stopSelf(startId)
         }
         return START_NOT_STICKY
